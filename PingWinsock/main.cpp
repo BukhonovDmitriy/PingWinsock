@@ -1,10 +1,14 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
+#define DEBUG
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <chrono>
 #include <iostream>
 #include <vector>
+
+#include "Headers.h"
+#include "Wrap.h"
 
 #pragma comment(lib, "Ws2_32.lib")
 #pragma pack(1)
@@ -18,27 +22,6 @@ const int DEFAULT_ITERATIONS = 15;
 const DWORD DEFAULT_TIMEOUT = 1500; //ms
 const DWORD DEFAULT_SLEEPTIME = 1000;
 
-struct IpHeader {
-	unsigned char  verlen;
-	unsigned char  tos;
-	unsigned short totallength;
-	unsigned short id;
-	unsigned short offset;
-	unsigned char  ttl;
-	unsigned char  protocol;
-	unsigned short checksum;
-	unsigned int   srcaddr;
-	unsigned int   destaddr;
-};
-
-struct IcmpHeader {
-	unsigned char  type;
-	unsigned char  code;
-	unsigned short checksum;
-	unsigned short id;
-	unsigned short seq;
-};
-
 enum class ResponseState {
 	good,
 	wrong_id,
@@ -49,22 +32,18 @@ enum class ResponseState {
 
 void usage(const char *progname);
 int validate_args(int argc, char **argv);
-addrinfo *resolve_address(const char *addr, const char *port, int af, int type, int proto);
 
 unsigned short eval_checksum(const unsigned short *buffer, int size);
-void config_icmp_hdr(char *icmp_data, int datasize);
-
-inline int sendto(SOCKET s, const std::vector<char> &buf, int flags, const sockaddr *to, int tolen);
-inline int recvfrom(SOCKET s, std::vector<char> &buf, int flags, sockaddr *from, int *fromlen);
+void config_icmp_hdr(char *icmp_data, int datasize); //also fills in checksum so fill your data before
 
 ResponseState validate_response(const std::vector<char> &response);
 
-int main(int argc, char **argv) {
-	WSADATA wsaData;
-	SOCKET sock_raw = INVALID_SOCKET;
+int ping(int argc, char **argv) {
+	Wrap::WSAData wsadata;
 
-	addrinfo *dest = nullptr, *local = nullptr;
-
+	Wrap::AddrInfo dest(argv[1], "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
+	Wrap::AddrInfo local(nullptr, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
+	
 	size_t datasize = DEFAULT_DATA_SIZE;
 	DWORD timeout = DEFAULT_TIMEOUT;
 	DWORD sleeptime = DEFAULT_SLEEPTIME;
@@ -72,52 +51,8 @@ int main(int argc, char **argv) {
 
 	int status = 0;
 
-	if (WSAStartup(MAKEWORD(2, 2), &wsaData)) {
-		status = WSAGetLastError();
-		std::cout << "error with WSAStartup: " << status << std::endl;
-		return status;
-	}
-
-	if (validate_args(argc, argv)) {
-		usage(argv[0]);
-		status = -2;
-		goto CLEANUP;
-	}
-
-	dest = resolve_address(argv[1], "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
-
-	if (dest == nullptr) {
-		std::cout << "bad name: " << argv[1] << std::endl;
-		status = -1;
-		goto CLEANUP;
-	}
-
-	std::cout << inet_ntoa(((sockaddr_in *)(dest->ai_addr))->sin_addr) << std::endl;
-
-	local = resolve_address(NULL, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
-
-	if (local == nullptr) {
-		std::cout << "Unable to obtain the bind address!" << std::endl;
-		status = -1;
-		goto CLEANUP;
-	}
-
-	std::cout << inet_ntoa(((sockaddr_in *)(local->ai_addr))->sin_addr) << std::endl;
-
-	sock_raw = WSASocketW(AF_INET, SOCK_RAW, IPPROTO_ICMP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-
-	if (sock_raw == INVALID_SOCKET) {
-		status = WSAGetLastError();
-		std::cout << "error with WSASocket: " << status << std::endl;
-		goto CLEANUP;
-	}
-
-	if (setsockopt(sock_raw, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout))) {
-		status = WSAGetLastError();
-		std::cout << "error with setsockopt: " << status << std::endl;
-		goto CLEANUP;
-	}
-
+	Wrap::Socket sock_raw(AF_INET, SOCK_RAW, IPPROTO_ICMP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+	sock_raw.setopt(SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
 
 	for (int i = 0; i != iter_count; ++i) {
 		int bytes_wrote, bytes_read;
@@ -129,41 +64,29 @@ int main(int argc, char **argv) {
 
 		config_icmp_hdr(&buf_send[0], datasize);
 
-		bytes_wrote = sendto(sock_raw, buf_send, 0, dest->ai_addr, dest->ai_addrlen);
-
-		if (bytes_wrote == SOCKET_ERROR) {
-			int err_code = WSAGetLastError();
-			if (err_code == WSAETIMEDOUT) {
-				std::cout << "Timed out" << std::endl;
-				continue;
-			}
-			status = err_code;
-			std::cout << "error with sendto: " << status << std::endl;
-			goto CLEANUP;
+		try {
+			bytes_wrote = sock_raw.sendto(buf_send, 0, dest);
+		}
+		catch (Wrap::Socket::TimeoutException) {
+			std::cout << "Timed out" << std::endl;
+			continue;
 		}
 
 		auto start_recv{ std::chrono::steady_clock::now() };
 
 		for (;;) {
-			bytes_read = recvfrom(sock_raw, buf_recv, 0, local->ai_addr, (int *)&local->ai_addrlen);
-
-			if (bytes_read == SOCKET_ERROR) {
-				int err_code = WSAGetLastError();
-				if (err_code == WSAETIMEDOUT) {
-					st = ResponseState::timed_out;
-					break;
-				}
-				status = err_code;
-				std::cout << "error with recvfrom: " << status << std::endl;
-				goto CLEANUP;
+			try {
+				bytes_read = sock_raw.recvfrom(buf_recv, 0, local);
+			}
+			catch (Wrap::Socket::TimeoutException) {
+				st = ResponseState::timed_out;
+				break;
 			}
 
 			st = validate_response(buf_recv);
 
 			if (st != ResponseState::wrong_id)
 				break;
-
-			std::cout << '.';
 		}
 
 		auto end_recv{ std::chrono::steady_clock::now() };
@@ -193,19 +116,27 @@ int main(int argc, char **argv) {
 			Sleep(sleeptime);
 	}
 
-CLEANUP:
-	if (dest)
-		freeaddrinfo(dest);
-
-	if (local)
-		freeaddrinfo(local);
-
-	if (sock_raw != INVALID_SOCKET)
-		closesocket(sock_raw);
-
-	WSACleanup();
-
 	return status;
+}
+
+int main(int argc, char **argv) {
+	if (validate_args(argc, argv)) {
+		usage(argv[0]);
+		return -2;
+	}
+
+#ifdef DEBUG
+	ping(argc, argv);
+#else
+	try {
+		ping(argc, argv);
+	}
+	catch (const std::runtime_error &e) {
+		std::cout << e.what() << std::endl;
+		std::cerr << e.what() << std::endl;
+		throw;
+	}
+#endif
 }
 
 int validate_args(int argc, char **argv) {
@@ -217,24 +148,6 @@ int validate_args(int argc, char **argv) {
 
 void usage(const char *progname) {
 	std::cout << "usage: " << progname << "<IP>" << std::endl;
-}
-
-addrinfo *resolve_address(const char *addr, const char *port, int af, int type, int proto) {
-	struct addrinfo hints, *res = NULL;
-	int rc;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_flags = ((addr) ? 0 : AI_PASSIVE);
-	hints.ai_family = af;
-	hints.ai_socktype = type;
-	hints.ai_protocol = proto;
-
-	rc = getaddrinfo(addr, port, &hints, &res);
-
-	if (rc != 0)
-		return nullptr;
-
-	return res;
 }
 
 unsigned short eval_checksum(const unsigned short *buffer, int size) {
@@ -266,19 +179,11 @@ void config_icmp_hdr(char *icmp_data, int datasize) {
 	hdr->checksum = eval_checksum((USHORT *)icmp_data, sizeof(IcmpHeader) + datasize);
 }
 
-inline int sendto(SOCKET s, const std::vector<char> &buf, int flags, const sockaddr *to, int tolen) {
-	return sendto(s, &buf[0], buf.size(), flags, to, tolen);
-}
-
-inline int recvfrom(SOCKET s, std::vector<char> &buf, int flags, sockaddr *from, int *fromlen) {
-	return recvfrom(s, &buf[0], buf.size(), flags, from, fromlen);
-}
-
 ResponseState validate_response(const std::vector<char> &response) {
-	const IpHeader *ip_hdr = reinterpret_cast<const IpHeader *>(&response[0]);
-	const IcmpHeader *icmp_hdr = reinterpret_cast<const IcmpHeader *>(&response[sizeof(IpHeader)]);
+	const IpHeader *ip_hdr = (const IpHeader *)&response[0];
+	const IcmpHeader *icmp_hdr = (const IcmpHeader *)&response[sizeof(IpHeader)];
 
-	if (eval_checksum(reinterpret_cast<const USHORT *>(icmp_hdr), response.size() - sizeof(IpHeader)))
+	if (eval_checksum((const USHORT *)icmp_hdr, response.size() - sizeof(IpHeader)))
 		return ResponseState::invalid_checksum;
 
 	if (icmp_hdr->id != (USHORT)GetCurrentProcessId())
