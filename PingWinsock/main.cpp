@@ -22,6 +22,14 @@ const int DEFAULT_ITERATIONS = 15;
 const DWORD DEFAULT_TIMEOUT = 1500; //ms
 const DWORD DEFAULT_SLEEPTIME = 1000;
 
+struct PingParams {
+	const char *progname;
+	size_t datasize;
+	DWORD timeout;
+	DWORD sleeptime;
+	int iter_count;
+};
+
 enum class ResponseState {
 	good,
 	wrong_id,
@@ -38,31 +46,26 @@ void config_icmp_hdr(char *icmp_data, int datasize); //also fills in checksum so
 
 ResponseState validate_response(const std::vector<char> &response);
 
-int ping(int argc, char **argv) {
+int ping(const PingParams &params) {
 	Wrap::WSAData wsadata;
 
-	Wrap::AddrInfo dest(argv[1], "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
+	Wrap::AddrInfo dest(params.progname, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
 	Wrap::AddrInfo local(nullptr, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
-	
-	size_t datasize = DEFAULT_DATA_SIZE;
-	DWORD timeout = DEFAULT_TIMEOUT;
-	DWORD sleeptime = DEFAULT_SLEEPTIME;
-	int iter_count = DEFAULT_ITERATIONS;
 
 	int status = 0;
 
 	Wrap::Socket sock_raw(AF_INET, SOCK_RAW, IPPROTO_ICMP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-	sock_raw.setopt(SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
+	sock_raw.setopt(SOL_SOCKET, SO_RCVTIMEO, (char *)&params.timeout, sizeof(params.timeout));
 
-	for (int i = 0; i != iter_count; ++i) {
+	for (int i = 0; i != params.iter_count; ++i) {
 		int bytes_wrote, bytes_read;
 
 		ResponseState st;
 
-		std::vector<char> buf_send(sizeof(IcmpHeader) + datasize, 'e');
-		std::vector<char> buf_recv(sizeof(IpHeader) + sizeof(IcmpHeader) + datasize);
+		std::vector<char> buf_send(sizeof(IcmpHeader) + params.datasize, 'e');
+		std::vector<char> buf_recv(sizeof(IpHeader) + sizeof(IcmpHeader) + params.datasize);
 
-		config_icmp_hdr(&buf_send[0], datasize);
+		config_icmp_hdr(&buf_send[0], params.datasize);
 
 		try {
 			bytes_wrote = sock_raw.sendto(buf_send, 0, dest);
@@ -112,8 +115,8 @@ int ping(int argc, char **argv) {
 			break;
 		}
 
-		if (i + 1 != iter_count)
-			Sleep(sleeptime);
+		if (i + 1 != params.iter_count)
+			Sleep(params.sleeptime);
 	}
 
 	return status;
@@ -125,11 +128,18 @@ int main(int argc, char **argv) {
 		return -2;
 	}
 
+	PingParams params;
+	params.datasize = DEFAULT_DATA_SIZE;
+	params.iter_count = DEFAULT_ITERATIONS;
+	params.progname = argv[1];
+	params.sleeptime = DEFAULT_SLEEPTIME;
+	params.timeout = DEFAULT_TIMEOUT;
+
 #ifdef DEBUG
-	ping(argc, argv);
+	ping(params);
 #else
 	try {
-		ping(argc, argv);
+		ping(params);
 	}
 	catch (const std::runtime_error &e) {
 		std::cout << e.what() << std::endl;
