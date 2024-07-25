@@ -46,13 +46,11 @@ void config_icmp_hdr(char *icmp_data, int datasize); //also fills in checksum so
 
 ResponseState validate_response(const std::vector<char> &response);
 
-int ping(const PingParams &params) {
+void ping(const PingParams &params) {
 	Wrap::WSAData wsadata;
 
 	Wrap::AddrInfo dest(params.progname, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
 	Wrap::AddrInfo local(nullptr, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
-
-	int status = 0;
 
 	Wrap::Socket sock_raw(AF_INET, SOCK_RAW, IPPROTO_ICMP, nullptr, 0, WSA_FLAG_OVERLAPPED);
 	sock_raw.setopt(SOL_SOCKET, SO_RCVTIMEO, (char *)&params.timeout, sizeof(params.timeout));
@@ -118,8 +116,6 @@ int ping(const PingParams &params) {
 		if (i + 1 != params.iter_count)
 			Sleep(params.sleeptime);
 	}
-
-	return status;
 }
 
 int main(int argc, char **argv) {
