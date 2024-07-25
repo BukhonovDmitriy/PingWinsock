@@ -7,151 +7,156 @@
 #include <vector>
 
 namespace WsaWrap {
-	class WSAData {
-	public:
-		::WSAData data;
+    class WsaData {
+        ::WSAData data;
 
-		WSAData() {
-			if (WSAStartup(MAKEWORD(2, 2), &data)) {
-				int err_code = WSAGetLastError();
-				std::stringstream msg;
-				msg << "WSAStartup failed with error" << err_code;
-				throw std::runtime_error(msg.str().c_str());
-			}
-		}
+    public:
+        WsaData() {
+            if (WSAStartup(MAKEWORD(2, 2), &data)) {
+                int err_code = WSAGetLastError();
+                std::stringstream msg;
+                msg << "WSAStartup failed with error" << err_code;
+                throw std::runtime_error(msg.str().c_str());
+            }
+        }
 
-		~WSAData() {
-			WSACleanup();
-		}
-	};
+        const ::WSAData &get() const noexcept {
+            return data;
+        }
 
-	class AddrInfo {
-		addrinfo *addr_info;
+        ~WsaData() {
+            WSACleanup();
+        }
+    };
 
-	public:
-		AddrInfo(const char *addr, const char *port, int af, int type, int proto) {
-			addrinfo hints;
-			addr_info = NULL;
-			int rc;
+    class AddrInfo {
+        addrinfo *addr_info;
 
-			memset(&hints, 0, sizeof(hints));
-			hints.ai_flags = ((addr) ? 0 : AI_PASSIVE);
-			hints.ai_family = af;
-			hints.ai_socktype = type;
-			hints.ai_protocol = proto;
+    public:
+        //resolving name
+        AddrInfo(const char *addr, const char *port, int af, int type, int proto) {
+            addrinfo hints;
+            addr_info = NULL;
+            int rc;
 
-			rc = getaddrinfo(addr, port, &hints, &addr_info);
+            memset(&hints, 0, sizeof(hints));
+            hints.ai_flags = ((addr) ? 0 : AI_PASSIVE);
+            hints.ai_family = af;
+            hints.ai_socktype = type;
+            hints.ai_protocol = proto;
 
-			if (rc != 0) {
-				int err_code = WSAGetLastError();
-				std::stringstream msg;
-				if (addr) msg << "Bad name: " << addr;
-				else msg << "Unable to obtain local address '";
-				msg << "'. error code: " << err_code;
-				throw std::runtime_error(msg.str().c_str());
-			}
-		}
+            rc = getaddrinfo(addr, port, &hints, &addr_info);
 
-		addrinfo &info() noexcept {
-			return *addr_info;
-		}
+            if (rc != 0) {
+                int err_code = WSAGetLastError();
+                std::stringstream msg;
+                if (addr) msg << "Bad name: " << addr;
+                else msg << "Unable to obtain local address '";
+                msg << "'. error code: " << err_code;
+                throw std::runtime_error(msg.str().c_str());
+            }
+        }
 
-		const addrinfo &info() const noexcept {
-			return *addr_info;
-		}
+        addrinfo &info() noexcept {
+            return *addr_info;
+        }
 
-		~AddrInfo() {
-			if (addr_info)
-				freeaddrinfo(addr_info);
-		}
-	};
+        const addrinfo &info() const noexcept {
+            return *addr_info;
+        }
 
-	class Socket {
-		SOCKET sock;
+        ~AddrInfo() {
+            if (addr_info)
+                freeaddrinfo(addr_info);
+        }
+    };
 
-	public:
-		class TimeoutException {};
+    class Socket {
+        const SOCKET sock;
 
-		Socket(
-			int af,
-			int type,
-			int proto,
-			LPWSAPROTOCOL_INFOW lpProtocolInfo,
-			GROUP g,
-			DWORD dwFlags
-		) : sock(WSASocket(af, type, proto, lpProtocolInfo, g, dwFlags)) {
-			if (sock == INVALID_SOCKET) {
-				int err_code = WSAGetLastError();
-				std::stringstream msg;
-				msg << "WSASocket (Socket constructor) error: " << err_code;
-				throw std::runtime_error(msg.str().c_str());
-			}
-		}
+    public:
+        class TimeoutException : public std::runtime_error {
+        public:
+            TimeoutException(const char *msg = "Timeout exception!")
+                : std::runtime_error(msg) {}
+        };
 
-		SOCKET get() const noexcept {
-			return sock;
-		}
+        Socket(
+            int af,
+            int type,
+            int proto,
+            LPWSAPROTOCOL_INFOW lpProtocolInfo,
+            GROUP g,
+            DWORD dwFlags
+        ) : sock(WSASocket(af, type, proto, lpProtocolInfo, g, dwFlags)) {
+            if (sock == INVALID_SOCKET) {
+                int err_code = WSAGetLastError();
+                std::stringstream msg;
+                msg << "WSASocket (Socket constructor) error: " << err_code;
+                throw std::runtime_error(msg.str().c_str());
+            }
+        }
 
-		int sendto(const std::vector<char> &buf, int flags, const AddrInfo &dest) {
-			int bsent = ::sendto(
-				sock,
-				&buf[0],
-				buf.size(),
-				flags,
-				dest.info().ai_addr,
-				dest.info().ai_addrlen
-			);
+        int sendto(const std::vector<char> &buf, int flags, const AddrInfo &dest) {
+            int bsent = ::sendto(
+                sock,
+                &buf[0],
+                buf.size(),
+                flags,
+                dest.info().ai_addr,
+                dest.info().ai_addrlen
+            );
 
-			if (bsent == SOCKET_ERROR) {
-				int err_code = WSAGetLastError();
+            if (bsent == SOCKET_ERROR) {
+                int err_code = WSAGetLastError();
 
-				if (err_code == WSAETIMEDOUT)
-					throw TimeoutException();
+                if (err_code == WSAETIMEDOUT)
+                    throw TimeoutException();
 
-				std::stringstream msg;
-				msg << "sendto (in Socket.sendto) failed with error" << err_code;
-				throw std::runtime_error(msg.str().c_str());
-			}
+                std::stringstream msg;
+                msg << "sendto (in Socket.sendto) failed with error" << err_code;
+                throw std::runtime_error(msg.str().c_str());
+            }
 
-			return bsent;
-		}
+            return bsent;
+        }
 
-		int recvfrom(std::vector<char> &buf, int flags, AddrInfo &local) {
-			int bread = ::recvfrom(
-				sock,
-				&buf[0],
-				buf.size(),
-				flags,
-				local.info().ai_addr,
-				reinterpret_cast<int *>(&local.info().ai_addrlen)
-			);
+        int recvfrom(std::vector<char> &buf, int flags, AddrInfo &local) {
+            int bread = ::recvfrom(
+                sock,
+                &buf[0],
+                buf.size(),
+                flags,
+                local.info().ai_addr,
+                reinterpret_cast<int *>(&local.info().ai_addrlen)
+            );
 
-			if (bread == SOCKET_ERROR) {
-				int err_code = WSAGetLastError();
+            if (bread == SOCKET_ERROR) {
+                int err_code = WSAGetLastError();
 
-				if (err_code == WSAETIMEDOUT)
-					throw TimeoutException();
+                if (err_code == WSAETIMEDOUT)
+                    throw TimeoutException();
 
-				std::stringstream msg;
-				msg << "sendto (in Socket.sendto) failed with error" << err_code;
-				throw std::runtime_error(msg.str().c_str());
-			}
+                std::stringstream msg;
+                msg << "sendto (in Socket.sendto) failed with error" << err_code;
+                throw std::runtime_error(msg.str().c_str());
+            }
 
-			return bread;
-		}
+            return bread;
+        }
 
-		void setopt(int level, int optname, const char *optval, int optlen) {
-			if (setsockopt(sock, level, optname, optval, optlen)) {
-				int err_code = WSAGetLastError();
-				std::stringstream msg;
-				msg << "setsockopt (in Socket.setopt) failed with error" << err_code;
-				throw std::runtime_error(msg.str().c_str());
-			}
-		}
+        void setopt(int level, int optname, const char *optval, int optlen) {
+            if (setsockopt(sock, level, optname, optval, optlen)) {
+                int err_code = WSAGetLastError();
+                std::stringstream msg;
+                msg << "setsockopt (in Socket.setopt) failed with error" << err_code;
+                throw std::runtime_error(msg.str().c_str());
+            }
+        }
 
-		~Socket() {
-			if (sock != INVALID_SOCKET)
-				closesocket(sock);
-		}
-	};
+        ~Socket() {
+            if (sock != INVALID_SOCKET)
+                closesocket(sock);
+        }
+    };
 };
