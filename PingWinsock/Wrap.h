@@ -6,7 +6,7 @@
 #include <sstream>
 #include <vector>
 
-namespace Wrap {
+namespace WsaWrap {
 	class WSAData {
 	public:
 		::WSAData data;

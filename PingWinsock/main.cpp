@@ -47,12 +47,12 @@ void config_icmp_hdr(char *icmp_data, int datasize); //also fills in checksum so
 ResponseState validate_response(const std::vector<char> &response);
 
 void ping(const PingParams &params) {
-	Wrap::WSAData wsadata;
+	WsaWrap::WSAData wsadata;
 
-	Wrap::AddrInfo dest(params.progname, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
-	Wrap::AddrInfo local(nullptr, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
+	WsaWrap::AddrInfo dest(params.progname, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
+	WsaWrap::AddrInfo local(nullptr, "0", AF_INET, SOCK_RAW, IPPROTO_ICMP);
 
-	Wrap::Socket sock_raw(AF_INET, SOCK_RAW, IPPROTO_ICMP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+	WsaWrap::Socket sock_raw(AF_INET, SOCK_RAW, IPPROTO_ICMP, nullptr, 0, WSA_FLAG_OVERLAPPED);
 	sock_raw.setopt(SOL_SOCKET, SO_RCVTIMEO, (char *)&params.timeout, sizeof(params.timeout));
 
 	for (int i = 0; i != params.iter_count; ++i) {
@@ -68,7 +68,7 @@ void ping(const PingParams &params) {
 		try {
 			bytes_wrote = sock_raw.sendto(buf_send, 0, dest);
 		}
-		catch (Wrap::Socket::TimeoutException) {
+		catch (WsaWrap::Socket::TimeoutException) {
 			std::cout << "Timed out" << std::endl;
 			continue;
 		}
@@ -79,7 +79,7 @@ void ping(const PingParams &params) {
 			try {
 				bytes_read = sock_raw.recvfrom(buf_recv, 0, local);
 			}
-			catch (Wrap::Socket::TimeoutException) {
+			catch (WsaWrap::Socket::TimeoutException) {
 				st = ResponseState::timed_out;
 				break;
 			}
